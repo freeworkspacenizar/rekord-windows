@@ -15,6 +15,7 @@
     <Company>Rekord</Company>
     <Description>Rekord — Native Windows screen area recorder for Animated WebP, 2-pass GIF, and MP4.</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon Condition="'$(RekordIconPath)' != '' and Exists('$(RekordIconPath)')">$(RekordIconPath)</ApplicationIcon>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
   </PropertyGroup>

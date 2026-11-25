@@ -45,7 +45,7 @@ dotnet publish (Join-Path $AppDir "src\Rekord\Rekord.csproj") `
     --self-contained true `
     -p:PublishSingleFile=true `
     -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:ApplicationIcon="$IconPath" `
+    -p:RekordIconPath="$IconPath" `
     -o "$OutAppDir"
 
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed." }

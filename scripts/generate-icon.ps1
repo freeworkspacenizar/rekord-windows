@@ -93,33 +93,35 @@ function Render-IconPng([int]$size) {
     $dotBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 250, 66, 58))
     $g.FillEllipse($dotBrush, $half - $dotR, $half - $dotR, $dotR * 2.0, $dotR * 2.0)
 
-    $ms = New-Object System.IO.MemoryStream
+    $ms = [System.IO.MemoryStream]::new()
     $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-    $bytes = $ms.ToArray()
+    [byte[]]$bytes = $ms.ToArray()
 
     $ms.Dispose(); $dotBrush.Dispose(); $glowBrush.Dispose(); $bPen.Dispose(); $rimPen.Dispose(); $grad.Dispose(); $squircle.Dispose(); $g.Dispose(); $bmp.Dispose()
-    return $bytes
+    return ,$bytes
 }
 
 $Sizes = @(16, 32, 48, 64, 128, 256)
 $Images = @()
 foreach ($sz in $Sizes) {
-    $Images += ,@{ Size = $sz; Data = (Render-IconPng $sz) }
+    [byte[]]$pngData = Render-IconPng $sz
+    $Images += @{ Size = $sz; Data = $pngData }
 }
 
 $OutDir = Split-Path -Parent $OutputPath
 if ($OutDir) { New-Item -ItemType Directory -Force -Path $OutDir | Out-Null }
 
 $fs = [System.IO.File]::Create($OutputPath)
-$bw = New-Object System.IO.BinaryWriter($fs)
+$bw = [System.IO.BinaryWriter]::new($fs)
 try {
-    # ICONDIR header
+    # ICONDIR header (6 bytes)
     $bw.Write([UInt16]0)
     $bw.Write([UInt16]1)
     $bw.Write([UInt16]$Images.Count)
 
     $offset = 6 + (16 * $Images.Count)
     foreach ($img in $Images) {
+        [byte[]]$raw = $img.Data
         $dimByte = if ($img.Size -ge 256) { [byte]0 } else { [byte]$img.Size }
         $bw.Write($dimByte)
         $bw.Write($dimByte)
@@ -127,18 +129,24 @@ try {
         $bw.Write([byte]0)
         $bw.Write([UInt16]1)
         $bw.Write([UInt16]32)
-        $bw.Write([UInt32]$img.Data.Length)
+        $bw.Write([UInt32]$raw.Length)
         $bw.Write([UInt32]$offset)
-        $offset += $img.Data.Length
+        $offset += $raw.Length
     }
 
+    $bw.Flush()
     foreach ($img in $Images) {
-        $bw.Write($img.Data)
+        [byte[]]$raw = $img.Data
+        $fs.Write($raw, 0, $raw.Length)
     }
+    $fs.Flush()
 }
 finally {
     $bw.Dispose()
     $fs.Dispose()
 }
 
-Write-Host "==> Generated Windows icon at $OutputPath"
+# Validate generated ICO readability
+$testIcon = [System.Drawing.Icon]::new($OutputPath)
+$testIcon.Dispose()
+Write-Host "==> Generated & verified Windows icon at $OutputPath ($((Get-Item $OutputPath).Length) bytes)"
