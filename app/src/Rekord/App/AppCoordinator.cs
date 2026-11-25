@@ -309,6 +309,10 @@ public sealed class AppCoordinator : IDisposable
         ElapsedSeconds = 0;
         NotifyStateChanged();
 
+        // Give DWM a brief frame to flush the hidden selection scrim before grabbing Frame #1
+        await Task.Delay(40);
+        if (SessionState != AppSessionStateKind.Recording) return;
+
         try
         {
             await _captureEngine.StartAsync(

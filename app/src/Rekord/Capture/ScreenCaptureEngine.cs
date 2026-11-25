@@ -335,7 +335,10 @@ public sealed class ScreenCaptureEngine : IDisposable
         CancellationToken ct)
     {
         var frameBuffer = new byte[width * height * 4];
+        var gdiProbeBuffer = new byte[width * height * 4];
         var hasLastValidFrame = false;
+        var dxgiVerifiedNonBlack = false;
+        var dxgiBlackCount = 0;
         var sw = Stopwatch.StartNew();
         var frameIntervalTicks = TimeSpan.TicksPerSecond / fps;
         var nextFrameTicks = 0L;
@@ -371,17 +374,66 @@ public sealed class ScreenCaptureEngine : IDisposable
                         var dxgiStatus = dxgi.TryGrabFrame(cropX, cropY, showCursor, frameBuffer);
                         if (dxgiStatus == DxgiGrabStatus.Captured)
                         {
-                            grabbed = true;
-                            hasLastValidFrame = true;
+                            if (!dxgiVerifiedNonBlack)
+                            {
+                                if (!IsBufferAllBlack(frameBuffer))
+                                {
+                                    dxgiVerifiedNonBlack = true;
+                                    grabbed = true;
+                                    hasLastValidFrame = true;
+                                }
+                                else
+                                {
+                                    dxgiBlackCount++;
+                                    // Verify against GDI: if desktop is not actually black, DXGI is broken on this GPU/driver -> switch to GDI
+                                    gdi ??= new GdiRegionGrabber(width, height);
+                                    if (gdi.GrabFrame(monitor.PhysicalX + cropX, monitor.PhysicalY + cropY, showCursor, gdiProbeBuffer))
+                                    {
+                                        if (!IsBufferAllBlack(gdiProbeBuffer))
+                                        {
+                                            Buffer.BlockCopy(gdiProbeBuffer, 0, frameBuffer, 0, frameBuffer.Length);
+                                            dxgi.Dispose();
+                                            dxgi = null;
+                                            grabbed = true;
+                                            hasLastValidFrame = true;
+                                        }
+                                        else if (dxgiBlackCount >= 3)
+                                        {
+                                            // Screen is genuinely black
+                                            dxgiVerifiedNonBlack = true;
+                                            grabbed = true;
+                                            hasLastValidFrame = true;
+                                        }
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                grabbed = true;
+                                hasLastValidFrame = true;
+                            }
                         }
-                        else if (dxgiStatus == DxgiGrabStatus.NoChange && hasLastValidFrame)
+                        else if (dxgiStatus == DxgiGrabStatus.NoChange)
                         {
-                            // Screen unchanged since previous frame — reuse last frame buffer smoothly
-                            grabbed = true;
+                            if (hasLastValidFrame)
+                            {
+                                // Screen unchanged since previous frame — reuse last frame buffer smoothly
+                                grabbed = true;
+                            }
+                            else
+                            {
+                                // Static screen on startup: seed initial frame immediately via GDI
+                                gdi ??= new GdiRegionGrabber(width, height);
+                                if (gdi.GrabFrame(monitor.PhysicalX + cropX, monitor.PhysicalY + cropY, showCursor, frameBuffer))
+                                {
+                                    grabbed = true;
+                                    hasLastValidFrame = true;
+                                }
+                            }
                         }
                         else if (dxgiStatus == DxgiGrabStatus.AccessLost)
                         {
-                            // Fallback cleanly to GDI BitBlt if DXGI loses access (UAC/RDP/GPU switch)
+                            // Fallback cleanly to GDI BitBlt if DXGI loses access (UAC/RDP/HDR/GPU switch)
                             dxgi.Dispose();
                             dxgi = null;
                         }
@@ -439,6 +491,20 @@ public sealed class ScreenCaptureEngine : IDisposable
             dxgi?.Dispose();
             gdi?.Dispose();
         }
+    }
+
+    private static bool IsBufferAllBlack(byte[] bgra)
+    {
+        // Fast strided sample across ~2000 pixels checking B, G, R channels (ignoring alpha)
+        var pixelCount = bgra.Length / 4;
+        if (pixelCount <= 0) return true;
+        var step = Math.Max(1, pixelCount / 2000) * 4;
+        for (var i = 0; i + 2 < bgra.Length; i += step)
+        {
+            if (bgra[i] != 0 || bgra[i + 1] != 0 || bgra[i + 2] != 0)
+                return false;
+        }
+        return true;
     }
 
     public void Dispose() => Abort();
@@ -562,7 +628,7 @@ internal sealed class DxgiMonitorDuplicator : IDisposable
 
     public DxgiGrabStatus TryGrabFrame(int cropX, int cropY, bool showCursor, byte[] destinationBgra)
     {
-        var hr = _duplication.AcquireNextFrame(16, out _, out var desktopResource);
+        var hr = _duplication.AcquireNextFrame(16, out var frameInfo, out var desktopResource);
         if (hr.Code == Vortice.DXGI.ResultCode.WaitTimeout.Code)
             return DxgiGrabStatus.NoChange;
 
@@ -571,11 +637,20 @@ internal sealed class DxgiMonitorDuplicator : IDisposable
 
         try
         {
+            // Ignore metadata-only / uninitialized initial DXGI frames that have no presented desktop surface yet
+            if (frameInfo.LastPresentTime == 0 && frameInfo.AccumulatedFrames == 0)
+                return DxgiGrabStatus.NoChange;
+
             using (desktopResource)
             using (var desktopTexture = desktopResource.QueryInterface<ID3D11Texture2D>())
             {
-                var safeX = Math.Clamp(cropX, 0, Math.Max(0, _monitorPhysW - _width));
-                var safeY = Math.Clamp(cropY, 0, Math.Max(0, _monitorPhysH - _height));
+                var texDesc = desktopTexture.Description;
+                // CopySubresourceRegion silently produces black if formats differ (e.g., HDR 10-bit/16-bit desktop)
+                if (texDesc.Format != Format.B8G8R8A8_UNorm || texDesc.Width < _width || texDesc.Height < _height)
+                    return DxgiGrabStatus.AccessLost;
+
+                var safeX = Math.Clamp(cropX, 0, Math.Max(0, texDesc.Width - _width));
+                var safeY = Math.Clamp(cropY, 0, Math.Max(0, texDesc.Height - _height));
 
                 var srcBox = new Box(safeX, safeY, 0, safeX + _width, safeY + _height, 1);
                 _context.CopySubresourceRegion(_stagingTexture, 0, 0, 0, 0, desktopTexture, 0, srcBox);

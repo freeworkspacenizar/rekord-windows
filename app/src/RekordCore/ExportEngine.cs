@@ -377,6 +377,8 @@ public sealed class ExportEngine
 
             if (useHardwareMediaFoundation)
             {
+                args.Add("-vf");
+                args.Add("format=nv12");
                 args.Add("-c:v");
                 args.Add("h264_mf");
                 args.Add("-rate_control");
@@ -390,10 +392,10 @@ public sealed class ExportEngine
                 args.Add("mpeg4");
                 args.Add("-q:v");
                 args.Add("3");
+                args.Add("-pix_fmt");
+                args.Add("yuv420p");
             }
 
-            args.Add("-pix_fmt");
-            args.Add("yuv420p");
             args.Add("-movflags");
             args.Add("+faststart");
             args.Add(outputPath);
@@ -442,6 +444,8 @@ public sealed class ExportEngine
         if (useHardwareMediaFoundation)
         {
             var bitrate = Math.Max(4_000_000, evenW * evenH * 6);
+            args.Add("-vf");
+            args.Add("format=nv12");
             args.Add("-c:v");
             args.Add("h264_mf");
             args.Add("-b:v");
@@ -455,10 +459,10 @@ public sealed class ExportEngine
             args.Add("mpeg4");
             args.Add("-q:v");
             args.Add("3");
+            args.Add("-pix_fmt");
+            args.Add("yuv420p");
         }
 
-        args.Add("-pix_fmt");
-        args.Add("yuv420p");
         args.Add("-movflags");
         args.Add("+faststart");
         args.Add(outputPath);

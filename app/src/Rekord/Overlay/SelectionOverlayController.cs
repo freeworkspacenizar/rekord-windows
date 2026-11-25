@@ -35,6 +35,7 @@ public sealed class SelectionOverlayController
     private SelectionCanvasControl? _canvas;
     private Window? _toolbarWindow;
     private StackPanel? _toolbarRoot;
+    private readonly Window?[] _borderStrips = new Window?[4]; // Top, Bottom, Left, Right exterior strips during recording
 
     // Toolbar dynamic references
     private TextBlock? _durationLabel;
@@ -116,10 +117,22 @@ public sealed class SelectionOverlayController
             _canvas.InvalidateVisual();
         }
 
-        if (_overlayWindow is not null)
+        if (newMode is OverlayMode.Recording or OverlayMode.Paused)
         {
-            var hwnd = new WindowInteropHelper(_overlayWindow).Handle;
-            Win32Interop.SetClickThrough(hwnd, newMode != OverlayMode.Selecting);
+            // Hide full-screen layered overlay completely during recording so DWM never blacks out
+            // DXGI / BitBlt capture. Render the frame border via 4 thin opaque strips strictly OUTSIDE the capture rect.
+            _overlayWindow?.Hide();
+            ShowOrUpdateBorderStrips(newMode);
+        }
+        else
+        {
+            CloseBorderStrips();
+            if (_overlayWindow is not null)
+            {
+                var hwnd = new WindowInteropHelper(_overlayWindow).Handle;
+                Win32Interop.SetClickThrough(hwnd, newMode != OverlayMode.Selecting);
+                _overlayWindow.Show();
+            }
         }
 
         if (newMode == OverlayMode.Countdown)
@@ -144,6 +157,7 @@ public sealed class SelectionOverlayController
 
     public void Close()
     {
+        CloseBorderStrips();
         if (_toolbarWindow is not null)
         {
             try { _toolbarWindow.Close(); } catch { }
@@ -160,6 +174,80 @@ public sealed class SelectionOverlayController
         _durationLabel = null;
         _statusDot = null;
         _pauseResumeButton = null;
+    }
+
+    private void ShowOrUpdateBorderStrips(OverlayMode mode)
+    {
+        const double thickness = 3.0;
+        const double pad = 1.0; // 1px outside capture rect so interior pixels are 100% untouched
+        var g = SelectionGlobalLogicalRect;
+        var brush = new SolidColorBrush(mode == OverlayMode.Paused
+            ? Color.FromRgb(255, 184, 41)
+            : Color.FromRgb(255, 68, 58));
+
+        var stripRects = new[]
+        {
+            // Top
+            new Rect(g.MinX - pad - thickness, g.MinY - pad - thickness, g.Width + (pad + thickness) * 2, thickness),
+            // Bottom
+            new Rect(g.MinX - pad - thickness, g.MaxY + pad, g.Width + (pad + thickness) * 2, thickness),
+            // Left
+            new Rect(g.MinX - pad - thickness, g.MinY - pad, thickness, g.Height + pad * 2),
+            // Right
+            new Rect(g.MaxX + pad, g.MinY - pad, thickness, g.Height + pad * 2)
+        };
+
+        for (var i = 0; i < 4; i++)
+        {
+            var r = stripRects[i];
+            if (_borderStrips[i] is null)
+            {
+                var strip = new Window
+                {
+                    WindowStyle = WindowStyle.None,
+                    AllowsTransparency = false,
+                    Background = brush,
+                    ShowInTaskbar = false,
+                    ShowActivated = false,
+                    Topmost = true,
+                    ResizeMode = ResizeMode.NoResize,
+                    Left = r.X,
+                    Top = r.Y,
+                    Width = Math.Max(1, r.Width),
+                    Height = Math.Max(1, r.Height)
+                };
+                strip.SourceInitialized += (_, _) =>
+                {
+                    var hwnd = new WindowInteropHelper(strip).Handle;
+                    Win32Interop.HideFromAltTab(hwnd, noActivate: true);
+                    Win32Interop.SetClickThrough(hwnd, true);
+                };
+                _borderStrips[i] = strip;
+                strip.Show();
+            }
+            else
+            {
+                var strip = _borderStrips[i]!;
+                strip.Background = brush;
+                strip.Left = r.X;
+                strip.Top = r.Y;
+                strip.Width = Math.Max(1, r.Width);
+                strip.Height = Math.Max(1, r.Height);
+                if (!strip.IsVisible) strip.Show();
+            }
+        }
+    }
+
+    private void CloseBorderStrips()
+    {
+        for (var i = 0; i < _borderStrips.Length; i++)
+        {
+            if (_borderStrips[i] is not null)
+            {
+                try { _borderStrips[i]!.Close(); } catch { }
+                _borderStrips[i] = null;
+            }
+        }
     }
 
     private void ApplyAspectRatio(AspectRatioPreset preset)
@@ -189,7 +277,11 @@ public sealed class SelectionOverlayController
         if (nextRect == SelectionRect) return;
 
         SelectionRect = nextRect;
-        if (_canvas is not null)
+        if (Mode is OverlayMode.Recording or OverlayMode.Paused)
+        {
+            ShowOrUpdateBorderStrips(Mode);
+        }
+        else if (_canvas is not null)
         {
             _canvas.SelectionRect = nextRect;
             _canvas.InvalidateVisual();
@@ -234,7 +326,6 @@ public sealed class SelectionOverlayController
         {
             var hwnd = new WindowInteropHelper(overlay).Handle;
             Win32Interop.HideFromAltTab(hwnd, noActivate: false);
-            Win32Interop.SetExcludeFromCapture(hwnd, true);
         };
 
         overlay.KeyDown += (_, e) =>
@@ -291,7 +382,6 @@ public sealed class SelectionOverlayController
         {
             var hwnd = new WindowInteropHelper(toolbar).Handle;
             Win32Interop.HideFromAltTab(hwnd, noActivate: true);
-            Win32Interop.SetExcludeFromCapture(hwnd, true);
         };
 
         _overlayWindow = overlay;
