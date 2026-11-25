@@ -585,7 +585,7 @@ internal sealed class TrayPopupWindow : Window
         if (_coordinator.LastExport is LastExportInfo info)
         {
             _lastExportCard.Visibility = Visibility.Visible;
-            _lastExportName.Text = Path.GetFileName(info.FilePath);
+            _lastExportName.Text = System.IO.Path.GetFileName(info.FilePath);
             _lastExportMeta.Text = $"{info.Format.GetDisplayName()} • {AppCoordinator.FormatBytes(info.FileSize)}";
         }
         else

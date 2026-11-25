@@ -494,12 +494,14 @@ internal sealed class DxgiMonitorDuplicator : IDisposable
         try
         {
             using var factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>();
-            for (uint adapterIndex = 0; factory.EnumAdapters1(adapterIndex, out var adapter).Success; adapterIndex++)
+            for (var adapterIndex = 0; factory.EnumAdapters1(adapterIndex, out var adapter).Success; adapterIndex++)
             {
+                if (adapter is null) break;
                 using (adapter)
                 {
-                    for (uint outputIndex = 0; adapter.EnumOutputs(outputIndex, out var output).Success; outputIndex++)
+                    for (var outputIndex = 0; adapter.EnumOutputs(outputIndex, out var output).Success; outputIndex++)
                     {
+                        if (output is null) break;
                         using (output)
                         {
                             var desc = output.Description;
@@ -515,8 +517,8 @@ internal sealed class DxgiMonitorDuplicator : IDisposable
                                 DriverType.Unknown,
                                 DeviceCreationFlags.BgraSupport,
                                 new[] { FeatureLevel.Level_11_1, FeatureLevel.Level_11_0, FeatureLevel.Level_10_1 },
-                                out var device,
-                                out var context
+                                out ID3D11Device? device,
+                                out ID3D11DeviceContext? context
                             );
                             if (createResult.Failure || device is null || context is null)
                                 return null;
@@ -526,15 +528,15 @@ internal sealed class DxgiMonitorDuplicator : IDisposable
                                 var duplication = output1.DuplicateOutput(device);
                                 var stagingDesc = new Texture2DDescription
                                 {
-                                    Width = (uint)width,
-                                    Height = (uint)height,
+                                    Width = width,
+                                    Height = height,
                                     MipLevels = 1,
                                     ArraySize = 1,
                                     Format = Format.B8G8R8A8_UNorm,
                                     SampleDescription = new SampleDescription(1, 0),
                                     Usage = ResourceUsage.Staging,
                                     BindFlags = BindFlags.None,
-                                    CpuAccessFlags = CpuAccessFlags.Read,
+                                    CPUAccessFlags = CpuAccessFlags.Read,
                                     MiscFlags = ResourceOptionFlags.None
                                 };
                                 var staging = device.CreateTexture2D(stagingDesc);
@@ -561,7 +563,7 @@ internal sealed class DxgiMonitorDuplicator : IDisposable
     public DxgiGrabStatus TryGrabFrame(int cropX, int cropY, bool showCursor, byte[] destinationBgra)
     {
         var hr = _duplication.AcquireNextFrame(16, out _, out var desktopResource);
-        if (hr.Code == ResultCode.WaitTimeout.Code)
+        if (hr.Code == Vortice.DXGI.ResultCode.WaitTimeout.Code)
             return DxgiGrabStatus.NoChange;
 
         if (hr.Failure || desktopResource is null)
