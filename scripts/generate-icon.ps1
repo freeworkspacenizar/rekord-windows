@@ -24,54 +24,74 @@ function New-RoundedRectPath([float]$x, [float]$y, [float]$w, [float]$h, [float]
 }
 
 function Render-IconPng([int]$size) {
-    $bmp = New-Object System.Drawing.Bitmap($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $bmp = [System.Drawing.Bitmap]::new($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $g.Clear([System.Drawing.Color]::Transparent)
 
     $s = [float]$size
-    $inset = $s * 0.08
-    $rectW = $s - $inset * 2
-    $radius = $rectW * 0.225
+    $inset = [float]($s * 0.08)
+    $rectW = [float]($s - $inset * 2.0)
+    $radius = [float]($rectW * 0.225)
     $squircle = New-RoundedRectPath $inset $inset $rectW $rectW $radius
 
     # Charcoal -> midnight gradient
-    $gradRect = New-Object System.Drawing.RectangleF($inset, $inset, $rectW, $rectW)
-    $grad = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
+    $gradRect = [System.Drawing.RectangleF]::new($inset, $inset, $rectW, $rectW)
+    $grad = [System.Drawing.Drawing2D.LinearGradientBrush]::new(
         $gradRect,
         [System.Drawing.Color]::FromArgb(255, 36, 38, 48),
         [System.Drawing.Color]::FromArgb(255, 18, 20, 28),
-        45.0
+        [float]45.0
     )
     $g.FillPath($grad, $squircle)
 
     # Subtle rim
-    $rimPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(46, 255, 255, 255), [Math]::Max(1.0, $s * 0.015))
+    $rimWidth = [float][Math]::Max(1.0, $s * 0.015)
+    $rimPen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(46, 255, 255, 255), $rimWidth)
     $g.DrawPath($rimPen, $squircle)
 
     # 4 white corner brackets
-    $fInset = $s * 0.24
-    $fSize = $s - $fInset * 2
-    $arm = $fSize * 0.26
-    $bPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(235, 255, 255, 255), [Math]::Max(1.8, $s * 0.042))
+    $fInset = [float]($s * 0.24)
+    $fSize = [float]($s - $fInset * 2.0)
+    $arm = [float]($fSize * 0.26)
+    $bWidth = [float][Math]::Max(1.8, $s * 0.042)
+    $bPen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(235, 255, 255, 255), $bWidth)
     $bPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
     $bPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
     $bPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
 
-    $x0 = $fInset; $y0 = $fInset; $x1 = $fInset + $fSize; $y1 = $fInset + $fSize
-    $g.DrawLines($bPen, [System.Drawing.PointF[]]@((New-Object System.Drawing.PointF($x0, $y0 + $arm)), (New-Object System.Drawing.PointF($x0, $y0)), (New-Object System.Drawing.PointF($x0 + $arm, $y0))))
-    $g.DrawLines($bPen, [System.Drawing.PointF[]]@((New-Object System.Drawing.PointF($x1 - $arm, $y0)), (New-Object System.Drawing.PointF($x1, $y0)), (New-Object System.Drawing.PointF($x1, $y0 + $arm))))
-    $g.DrawLines($bPen, [System.Drawing.PointF[]]@((New-Object System.Drawing.PointF($x0, $y1 - $arm)), (New-Object System.Drawing.PointF($x0, $y1)), (New-Object System.Drawing.PointF($x0 + $arm, $y1))))
-    $g.DrawLines($bPen, [System.Drawing.PointF[]]@((New-Object System.Drawing.PointF($x1 - $arm, $y1)), (New-Object System.Drawing.PointF($x1, $y1)), (New-Object System.Drawing.PointF($x1, $y1 - $arm))))
+    $x0 = [float]$fInset; $y0 = [float]$fInset; $x1 = [float]($fInset + $fSize); $y1 = [float]($fInset + $fSize)
+    $armF = [float]$arm
+    $g.DrawLines($bPen, [System.Drawing.PointF[]]@(
+        [System.Drawing.PointF]::new($x0, $y0 + $armF),
+        [System.Drawing.PointF]::new($x0, $y0),
+        [System.Drawing.PointF]::new($x0 + $armF, $y0)
+    ))
+    $g.DrawLines($bPen, [System.Drawing.PointF[]]@(
+        [System.Drawing.PointF]::new($x1 - $armF, $y0),
+        [System.Drawing.PointF]::new($x1, $y0),
+        [System.Drawing.PointF]::new($x1, $y0 + $armF)
+    ))
+    $g.DrawLines($bPen, [System.Drawing.PointF[]]@(
+        [System.Drawing.PointF]::new($x0, $y1 - $armF),
+        [System.Drawing.PointF]::new($x0, $y1),
+        [System.Drawing.PointF]::new($x0 + $armF, $y1)
+    ))
+    $g.DrawLines($bPen, [System.Drawing.PointF[]]@(
+        [System.Drawing.PointF]::new($x1 - $armF, $y1),
+        [System.Drawing.PointF]::new($x1, $y1),
+        [System.Drawing.PointF]::new($x1, $y1 - $armF)
+    ))
 
     # Glowing coral-red record dot
-    $dotR = $s * 0.145
-    $glowR = $dotR * 1.35
-    $glowBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(80, 255, 62, 52))
-    $g.FillEllipse($glowBrush, $s / 2 - $glowR, $s / 2 - $glowR, $glowR * 2, $glowR * 2)
+    $dotR = [float]($s * 0.145)
+    $glowR = [float]($dotR * 1.35)
+    $half = [float]($s / 2.0)
+    $glowBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(80, 255, 62, 52))
+    $g.FillEllipse($glowBrush, $half - $glowR, $half - $glowR, $glowR * 2.0, $glowR * 2.0)
 
-    $dotBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 250, 66, 58))
-    $g.FillEllipse($dotBrush, $s / 2 - $dotR, $s / 2 - $dotR, $dotR * 2, $dotR * 2)
+    $dotBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 250, 66, 58))
+    $g.FillEllipse($dotBrush, $half - $dotR, $half - $dotR, $dotR * 2.0, $dotR * 2.0)
 
     $ms = New-Object System.IO.MemoryStream
     $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
