@@ -1,0 +1,12 @@
+.DS_Store
+Thumbs.db
+*.user
+*.suo
+app/src/*/bin/
+app/src/*/obj/
+app/tests/*/bin/
+app/tests/*/obj/
+dist/
+vendor/ffmpeg/ffmpeg.exe
+vendor/ffmpeg/COPYING.LGPLv2.1
+vendor/ffmpeg/LICENSE.md
