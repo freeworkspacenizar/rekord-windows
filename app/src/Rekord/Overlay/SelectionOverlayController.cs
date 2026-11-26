@@ -104,7 +104,14 @@ public sealed class SelectionOverlayController
 
         _overlayWindow?.Show();
         _overlayWindow?.Activate();
-        _toolbarWindow?.Show();
+        if (_toolbarWindow is not null)
+        {
+            if (_overlayWindow is not null)
+                _toolbarWindow.Owner = _overlayWindow;
+            _toolbarWindow.Show();
+            RepositionToolbar();
+            Win32Interop.BringTopmostNoActivate(new WindowInteropHelper(_toolbarWindow).Handle);
+        }
         return true;
     }
 
@@ -119,6 +126,10 @@ public sealed class SelectionOverlayController
 
         if (newMode is OverlayMode.Recording or OverlayMode.Paused)
         {
+            // Detach Owner BEFORE hiding _overlayWindow so WPF does not hide _toolbarWindow too.
+            if (_toolbarWindow is not null)
+                _toolbarWindow.Owner = null;
+
             // Hide full-screen layered overlay completely during recording so DWM never blacks out
             // DXGI / BitBlt capture. Render the frame border via 4 thin opaque strips strictly OUTSIDE the capture rect.
             _overlayWindow?.Hide();
@@ -137,13 +148,23 @@ public sealed class SelectionOverlayController
 
         if (newMode == OverlayMode.Countdown)
         {
-            _toolbarWindow?.Hide();
+            if (_toolbarWindow is not null)
+            {
+                _toolbarWindow.Owner = null;
+                _toolbarWindow.Hide();
+            }
         }
         else
         {
             RebuildToolbarContent();
-            _toolbarWindow?.Show();
-            RepositionToolbar();
+            if (_toolbarWindow is not null)
+            {
+                if (newMode == OverlayMode.Selecting && _overlayWindow is not null && _overlayWindow.IsVisible)
+                    _toolbarWindow.Owner = _overlayWindow;
+                _toolbarWindow.Show();
+                RepositionToolbar();
+                Win32Interop.BringTopmostNoActivate(new WindowInteropHelper(_toolbarWindow).Handle);
+            }
         }
     }
 
@@ -160,6 +181,7 @@ public sealed class SelectionOverlayController
         CloseBorderStrips();
         if (_toolbarWindow is not null)
         {
+            try { _toolbarWindow.Owner = null; } catch { }
             try { _toolbarWindow.Close(); } catch { }
             _toolbarWindow = null;
             _toolbarRoot = null;
@@ -662,6 +684,8 @@ public sealed class SelectionOverlayController
 
         _toolbarWindow.Left = Math.Round(x);
         _toolbarWindow.Top = Math.Round(y);
+        if (_toolbarWindow.IsVisible)
+            Win32Interop.BringTopmostNoActivate(new WindowInteropHelper(_toolbarWindow).Handle);
     }
 
     private static UIElement CreateSeparator() => new Border
@@ -733,12 +757,14 @@ public sealed class SelectionOverlayController
 internal sealed class SelectionCanvasControl : FrameworkElement
 {
     private const double HandleHitRadius = 11.0;
+    private const double CreateDragThreshold = 8.0;
 
-    private enum DragKind { None, Move, Resize }
+    private enum DragKind { None, Move, Resize, Create }
     private DragKind _dragKind = DragKind.None;
     private ResizeHandle _activeHandle;
     private Point _dragStartPoint;
     private RectD _dragOriginalRect;
+    private bool _hasExceededCreateThreshold;
 
     public RectD SelectionRect { get; set; }
     public OverlayMode OverlayMode { get; set; } = OverlayMode.Selecting;
@@ -756,7 +782,8 @@ internal sealed class SelectionCanvasControl : FrameworkElement
         var fullRect = new Rect(0, 0, ActualWidth, ActualHeight);
         var selRect = new Rect(SelectionRect.X, SelectionRect.Y, SelectionRect.Width, SelectionRect.Height);
 
-        // 1. Dimmed outer scrim during Selection & Countdown only (transparent during Recording)
+        // 1. Dimmed outer scrim + nearly-invisible (alpha=1) hit-testable interior during Selection
+        // so Windows WS_EX_LAYERED hit-testing captures drag-to-move clicks inside selRect instead of passing through.
         if (OverlayMode is OverlayMode.Selecting or OverlayMode.Countdown)
         {
             var combined = new CombinedGeometry(
@@ -765,6 +792,11 @@ internal sealed class SelectionCanvasControl : FrameworkElement
                 new RectangleGeometry(selRect)
             );
             dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(98, 0, 0, 0)), null, combined);
+
+            if (OverlayMode == OverlayMode.Selecting)
+            {
+                dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)), null, selRect);
+            }
         }
 
         // 2. Exterior border drawn outside selectionRect so interior pixels stay exact
@@ -912,7 +944,11 @@ internal sealed class SelectionCanvasControl : FrameworkElement
         }
         else
         {
-            _dragKind = DragKind.None;
+            _dragKind = DragKind.Create;
+            _hasExceededCreateThreshold = false;
+            _dragStartPoint = pt;
+            _dragOriginalRect = SelectionRect;
+            CaptureMouse();
         }
         InvalidateVisual();
     }
@@ -933,7 +969,7 @@ internal sealed class SelectionCanvasControl : FrameworkElement
                 ResizeHandle.Left or ResizeHandle.Right => Cursors.SizeWE,
                 null when pt.X >= SelectionRect.MinX && pt.X <= SelectionRect.MaxX &&
                           pt.Y >= SelectionRect.MinY && pt.Y <= SelectionRect.MaxY => Cursors.SizeAll,
-                _ => Cursors.Arrow
+                _ => Cursors.Cross
             };
             return;
         }
@@ -941,9 +977,31 @@ internal sealed class SelectionCanvasControl : FrameworkElement
         var bounds = new RectD(0, 0, ActualWidth, ActualHeight);
         var delta = new SizeD(pt.X - _dragStartPoint.X, pt.Y - _dragStartPoint.Y);
 
-        SelectionRect = _dragKind == DragKind.Move
-            ? CaptureGeometry.Pan(_dragOriginalRect, delta, bounds)
-            : CaptureGeometry.Resize(_dragOriginalRect, _activeHandle, delta, AspectRatioProvider?.Invoke() ?? AspectRatioPreset.Free, bounds);
+        if (_dragKind == DragKind.Create)
+        {
+            if (!_hasExceededCreateThreshold)
+            {
+                if (Math.Abs(delta.Width) < CreateDragThreshold && Math.Abs(delta.Height) < CreateDragThreshold)
+                    return;
+                _hasExceededCreateThreshold = true;
+            }
+            SelectionRect = CaptureGeometry.CreateFromDrag(
+                _dragStartPoint.X,
+                _dragStartPoint.Y,
+                pt.X,
+                pt.Y,
+                AspectRatioProvider?.Invoke() ?? AspectRatioPreset.Free,
+                bounds
+            );
+        }
+        else if (_dragKind == DragKind.Move)
+        {
+            SelectionRect = CaptureGeometry.Pan(_dragOriginalRect, delta, bounds);
+        }
+        else
+        {
+            SelectionRect = CaptureGeometry.Resize(_dragOriginalRect, _activeHandle, delta, AspectRatioProvider?.Invoke() ?? AspectRatioPreset.Free, bounds);
+        }
 
         InvalidateVisual();
         SelectionChanged?.Invoke(SelectionRect);
@@ -953,6 +1011,7 @@ internal sealed class SelectionCanvasControl : FrameworkElement
     {
         base.OnMouseLeftButtonUp(e);
         _dragKind = DragKind.None;
+        _hasExceededCreateThreshold = false;
         if (IsMouseCaptured)
             ReleaseMouseCapture();
         InvalidateVisual();

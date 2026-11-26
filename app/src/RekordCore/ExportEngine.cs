@@ -225,7 +225,7 @@ public sealed class ExportEngine
         candidates.Add(Path.Combine(workDir, "vendor", "ffmpeg", exeName));
 
         var current = new DirectoryInfo(workDir);
-        for (var i = 0; i < 4 && current?.Parent is not null; i++)
+        for (var i = 0; i < 7 && current?.Parent is not null; i++)
         {
             current = current.Parent;
             candidates.Add(Path.Combine(current.FullName, "vendor", "ffmpeg", exeName));
@@ -254,9 +254,10 @@ public sealed class ExportEngine
     }
 
     /// <summary>
-    /// Pure function generating FFmpeg CLI arguments for high-quality 2-pass single-graph GIF encoding.
+    /// Pure function generating FFmpeg CLI arguments for Pass 1 of True Two-Pass GIF encoding:
+    /// streams frames in O(1) memory to generate an optimal 16x16 palette PNG on disk.
     /// </summary>
-    public static IReadOnlyList<string> BuildGifArguments(string inputPath, string outputPath, ExportOptions options)
+    public static IReadOnlyList<string> BuildGifPalettePassArguments(string inputPath, string palettePath, ExportOptions options)
     {
         var args = new List<string>
         {
@@ -280,13 +281,57 @@ public sealed class ExportEngine
         args.Add(inputPath);
 
         var targetWidth = options.ResolvedTargetWidth;
-        var baseChain = $"fps={options.ClampedFps},scale={targetWidth}:-2:flags=lanczos";
-        var paletteGen = $"palettegen=max_colors={options.Quality.GetMaxColors()}:stats_mode={options.Quality.GetStatsMode()}";
-        var paletteUse = $"paletteuse=dither={options.Quality.GetDitherMode()}:diff_mode=rectangle";
-        var filterComplex = $"{baseChain},split[s0][s1];[s0]{paletteGen}[p];[s1][p]{paletteUse}";
+        var paletteFilter = $"fps={options.ClampedFps},scale={targetWidth}:-2:flags=lanczos,palettegen=max_colors={options.Quality.GetMaxColors()}:stats_mode={options.Quality.GetStatsMode()}";
 
-        args.Add("-filter_complex");
-        args.Add(filterComplex);
+        args.Add("-vf");
+        args.Add(paletteFilter);
+        args.Add("-frames:v");
+        args.Add("1");
+        args.Add("-update");
+        args.Add("1");
+        args.Add(palettePath);
+
+        return args;
+    }
+
+    /// <summary>
+    /// Pure function generating FFmpeg CLI arguments for Pass 2 of True Two-Pass GIF encoding:
+    /// streams frames in O(1) memory using the pre-generated palette PNG.
+    /// </summary>
+    public static IReadOnlyList<string> BuildGifEncodePassArguments(
+        string inputPath,
+        string palettePath,
+        string outputPath,
+        ExportOptions options)
+    {
+        var args = new List<string>
+        {
+            "-nostdin",
+            "-y",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-progress", "pipe:1",
+            "-nostats"
+        };
+
+        if (options.TrimRange is TrimRange trim && !trim.IsFullRange(options.TotalDuration))
+        {
+            args.Add("-ss");
+            args.Add(trim.Start.ToString("F3", CultureInfo.InvariantCulture));
+            args.Add("-t");
+            args.Add(trim.Duration.ToString("F3", CultureInfo.InvariantCulture));
+        }
+
+        args.Add("-i");
+        args.Add(inputPath);
+        args.Add("-i");
+        args.Add(palettePath);
+
+        var targetWidth = options.ResolvedTargetWidth;
+        var lavfi = $"fps={options.ClampedFps},scale={targetWidth}:-2:flags=lanczos[x];[x][1:v]paletteuse=dither={options.Quality.GetDitherMode()}:diff_mode=rectangle";
+
+        args.Add("-lavfi");
+        args.Add(lavfi);
         args.Add("-loop");
         args.Add(options.LoopForever ? "0" : "-1");
         args.Add(outputPath);
@@ -502,14 +547,55 @@ public sealed class ExportEngine
         CancellationToken cancellationToken = default)
     {
         var binaryPath = ResolveFfmpegPath();
-        var args = options.Format switch
-        {
-            ExportFormat.WebP => BuildWebPArguments(inputPath, outputPath, options),
-            ExportFormat.Gif => BuildGifArguments(inputPath, outputPath, options),
-            _ => BuildWebPArguments(inputPath, outputPath, options)
-        };
 
-        await RunFfmpegAsync(binaryPath, args, options.EffectiveDuration, onProgress, cancellationToken);
+        if (options.Format == ExportFormat.Gif)
+        {
+            var palettePath = Path.Combine(Path.GetTempPath(), $"Rekord_Palette_{Guid.NewGuid():N}.png");
+            try
+            {
+                // Pass 1 (0% -> 35%): O(1)-memory palette generation
+                var pass1Args = BuildGifPalettePassArguments(inputPath, palettePath, options);
+                await RunFfmpegAsync(
+                    binaryPath,
+                    pass1Args,
+                    options.EffectiveDuration,
+                    p => onProgress?.Invoke(Math.Clamp(p, 0.0, 1.0) * 0.35),
+                    cancellationToken
+                );
+
+                bool cancelledAfterPass1;
+                lock (_lock)
+                {
+                    cancelledAfterPass1 = _cancelRequested || cancellationToken.IsCancellationRequested;
+                }
+                if (cancelledAfterPass1)
+                    throw new ExportException(ExportErrorKind.Cancelled, "Conversion cancelled.");
+
+                // Pass 2 (35% -> 100%): O(1)-memory GIF encoding with pre-generated palette
+                var pass2Args = BuildGifEncodePassArguments(inputPath, palettePath, outputPath, options);
+                await RunFfmpegAsync(
+                    binaryPath,
+                    pass2Args,
+                    options.EffectiveDuration,
+                    p => onProgress?.Invoke(0.35 + Math.Clamp(p, 0.0, 1.0) * 0.65),
+                    cancellationToken
+                );
+
+                return outputPath;
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(palettePath))
+                        File.Delete(palettePath);
+                }
+                catch { }
+            }
+        }
+
+        var webpArgs = BuildWebPArguments(inputPath, outputPath, options);
+        await RunFfmpegAsync(binaryPath, webpArgs, options.EffectiveDuration, onProgress, cancellationToken);
         return outputPath;
     }
 

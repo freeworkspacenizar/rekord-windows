@@ -317,6 +317,63 @@ public static class CaptureGeometry
     }
 
     /// <summary>
+    /// Creates a new selection rectangle from a click-and-drag gesture between <c>(anchorX, anchorY)</c>
+    /// and <c>(currentX, currentY)</c> in any quadrant, optionally enforcing <paramref name="aspectRatio"/>
+    /// and clamping inside <paramref name="bounds"/> with at least <see cref="MinimumDimension"/>.
+    /// </summary>
+    public static RectD CreateFromDrag(
+        double anchorX,
+        double anchorY,
+        double currentX,
+        double currentY,
+        AspectRatioPreset aspectRatio,
+        RectD bounds)
+    {
+        var ax = Math.Clamp(anchorX, bounds.MinX, bounds.MaxX);
+        var ay = Math.Clamp(anchorY, bounds.MinY, bounds.MaxY);
+        var cx = Math.Clamp(currentX, bounds.MinX, bounds.MaxX);
+        var cy = Math.Clamp(currentY, bounds.MinY, bounds.MaxY);
+
+        var dx = cx - ax;
+        var dy = cy - ay;
+        var signX = dx >= 0 ? 1.0 : -1.0;
+        var signY = dy >= 0 ? 1.0 : -1.0;
+
+        var width = Math.Max(MinimumDimension, Math.Abs(dx));
+        var height = Math.Max(MinimumDimension, Math.Abs(dy));
+
+        if (aspectRatio.GetRatio() is double ratio)
+        {
+            // Fit width/height cleanly to the target aspect ratio while preserving drag direction
+            var candidateH = width / ratio;
+            if (candidateH < MinimumDimension)
+            {
+                height = MinimumDimension;
+                width = height * ratio;
+            }
+            else
+            {
+                height = candidateH;
+            }
+
+            if (width > bounds.Width)
+            {
+                width = bounds.Width;
+                height = width / ratio;
+            }
+            if (height > bounds.Height)
+            {
+                height = bounds.Height;
+                width = height * ratio;
+            }
+        }
+
+        var x = signX >= 0 ? ax : ax - width;
+        var y = signY >= 0 ? ay : ay - height;
+        return ClampRect(new RectD(x, y, width, height), bounds);
+    }
+
+    /// <summary>
     /// Moves a rectangle by <paramref name="delta"/> while locking width &amp; height (used for live panning during recording).
     /// </summary>
     public static RectD Pan(RectD rect, SizeD delta, RectD bounds)

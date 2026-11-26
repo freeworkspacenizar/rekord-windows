@@ -34,6 +34,7 @@ public sealed class PreviewExportWindow : Window
     private readonly Button _playPauseBtn = new();
 
     private readonly TextBlock _webpSavingsBadge;
+    private readonly Border _webpSavingsBadgeBorder;
     private readonly TextBlock _dimensionsText = new();
     private readonly TextBlock _qualityHeader = new();
     private readonly StackPanel _customWidthRow;
@@ -43,6 +44,7 @@ public sealed class PreviewExportWindow : Window
     private readonly StackPanel _progressPanel;
     private readonly TextBlock _progressPctText = new();
     private readonly ProgressBar _progressBar;
+    private readonly Border _errorCard;
     private readonly TextBlock _errorText;
     private readonly Border _statusBannerCard;
     private readonly TextBlock _statusBannerText = new();
@@ -248,11 +250,23 @@ public sealed class PreviewExportWindow : Window
         {
             Foreground = new SolidColorBrush(Color.FromRgb(255, 110, 100)),
             FontSize = 11,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 0, 0, 8),
-            Visibility = Visibility.Collapsed
+            TextWrapping = TextWrapping.Wrap
         };
-        actionStack.Children.Add(_errorText);
+        _errorCard = new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            Background = new SolidColorBrush(Color.FromArgb(30, 255, 80, 70)),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 0, 0, 8),
+            Visibility = Visibility.Collapsed,
+            Child = new ScrollViewer
+            {
+                MaxHeight = 88,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Content = _errorText
+            }
+        };
+        actionStack.Children.Add(_errorCard);
 
         var bannerStack = new StackPanel();
         _statusBannerText.Foreground = new SolidColorBrush(Color.FromRgb(115, 235, 158));
@@ -364,15 +378,15 @@ public sealed class PreviewExportWindow : Window
             Foreground = new SolidColorBrush(Color.FromRgb(115, 235, 158)),
             VerticalAlignment = VerticalAlignment.Center
         };
-        var badgeBorder = new Border
+        _webpSavingsBadgeBorder = new Border
         {
             CornerRadius = new CornerRadius(10),
             Background = new SolidColorBrush(Color.FromArgb(42, 72, 220, 130)),
             Padding = new Thickness(7, 2, 7, 2),
             Child = _webpSavingsBadge
         };
-        DockPanel.SetDock(badgeBorder, Dock.Right);
-        titleRow.Children.Add(badgeBorder);
+        DockPanel.SetDock(_webpSavingsBadgeBorder, Dock.Right);
+        titleRow.Children.Add(_webpSavingsBadgeBorder);
         titleRow.Children.Add(new TextBlock { Text = "Export", FontSize = 16, FontWeight = FontWeights.Bold, Foreground = Brushes.White });
         inspector.Children.Add(titleRow);
 
@@ -612,7 +626,7 @@ public sealed class PreviewExportWindow : Window
     {
         if (_isExporting) return;
         _isExporting = true;
-        _errorText.Visibility = Visibility.Collapsed;
+        _errorCard.Visibility = Visibility.Collapsed;
         _statusBannerCard.Visibility = Visibility.Collapsed;
         _progressPanel.Visibility = Visibility.Visible;
         _progressBar.Value = 0.02;
@@ -660,7 +674,7 @@ public sealed class PreviewExportWindow : Window
             _isExporting = false;
             _progressPanel.Visibility = Visibility.Collapsed;
             _errorText.Text = ex.Message;
-            _errorText.Visibility = Visibility.Visible;
+            _errorCard.Visibility = Visibility.Visible;
         }
         finally
         {
@@ -672,7 +686,7 @@ public sealed class PreviewExportWindow : Window
     {
         if (_isExporting) return;
         _isExporting = true;
-        _errorText.Visibility = Visibility.Collapsed;
+        _errorCard.Visibility = Visibility.Collapsed;
         _statusBannerCard.Visibility = Visibility.Collapsed;
         _progressPanel.Visibility = Visibility.Visible;
         _progressBar.Value = 0.05;
@@ -706,7 +720,7 @@ public sealed class PreviewExportWindow : Window
             _isExporting = false;
             _progressPanel.Visibility = Visibility.Collapsed;
             _errorText.Text = ex.Message;
-            _errorText.Visibility = Visibility.Visible;
+            _errorCard.Visibility = Visibility.Visible;
         }
         finally
         {
@@ -733,7 +747,7 @@ public sealed class PreviewExportWindow : Window
         _badgeText.Text = $"{dimText} • {RecordingTimeline.FormatDuration(_trimEnd - _trimStart, includeTenths: true)}";
         _trimTimeText.Text = $"{RecordingTimeline.FormatDuration(_trimStart, includeTenths: true)}  →  {RecordingTimeline.FormatDuration(_trimEnd, includeTenths: true)}";
 
-        _webpSavingsBadge.Visibility = _format == ExportFormat.WebP ? Visibility.Visible : Visibility.Collapsed;
+        _webpSavingsBadgeBorder.Visibility = _format == ExportFormat.WebP ? Visibility.Visible : Visibility.Collapsed;
         _customWidthRow.Visibility = _scaleMode == ExportScaleMode.Custom ? Visibility.Visible : Visibility.Collapsed;
         _qualityHeader.Text = _format == ExportFormat.WebP ? "Kualitas WebP (Animated)" : "Kualitas Palet (2-Pass GIF)";
 

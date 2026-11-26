@@ -37,6 +37,11 @@ internal static class Win32Interop
     public const uint DI_NORMAL = 0x0003;
     public const uint DIB_RGB_COLORS = 0;
 
+    public static readonly IntPtr HWND_TOPMOST = new(-1);
+    public const uint SWP_NOSIZE = 0x0001;
+    public const uint SWP_NOMOVE = 0x0002;
+    public const uint SWP_NOACTIVATE = 0x0010;
+
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
 
@@ -214,6 +219,16 @@ internal static class Win32Interop
     public static extern int GetDIBits(
         IntPtr hdc, IntPtr hbmp, uint uStartScan, uint cScanLines,
         byte[] lpvBits, ref BITMAPINFO lpbi, uint uUsage);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SetWindowPos(
+        IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    public static void BringTopmostNoActivate(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        _ = SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
 
     public static void SetExcludeFromCapture(IntPtr hwnd, bool exclude)
     {

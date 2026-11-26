@@ -1,6 +1,8 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using RekordCore;
 using Xunit;
 
@@ -69,6 +71,30 @@ public sealed class RekordCoreTests
     }
 
     [Fact]
+    public void CreateFromDrag_SupportsAllQuadrantsAspectLockAndBoundsClamping()
+    {
+        var bounds = new RectD(0, 0, 1440, 900);
+
+        // Top-left to bottom-right (free)
+        var br = CaptureGeometry.CreateFromDrag(100, 100, 500, 350, AspectRatioPreset.Free, bounds);
+        Assert.Equal(new RectD(100, 100, 400, 250), br);
+
+        // Bottom-right to top-left (reversed quadrant)
+        var tl = CaptureGeometry.CreateFromDrag(500, 350, 100, 100, AspectRatioPreset.Free, bounds);
+        Assert.Equal(new RectD(100, 100, 400, 250), tl);
+
+        // Tiny drag enforces minimum dimension
+        var tiny = CaptureGeometry.CreateFromDrag(200, 200, 220, 215, AspectRatioPreset.Free, bounds);
+        Assert.True(tiny.Width >= CaptureGeometry.MinimumDimension);
+        Assert.True(tiny.Height >= CaptureGeometry.MinimumDimension);
+
+        // Aspect ratio 16:9 stays locked and inside bounds
+        var wide = CaptureGeometry.CreateFromDrag(100, 100, 740, 200, AspectRatioPreset.Ratio16x9, bounds);
+        Assert.True(Math.Abs((wide.Width / wide.Height) - (16.0 / 9.0)) < 0.02);
+        Assert.True(bounds.Contains(wide));
+    }
+
+    [Fact]
     public void Pan_LocksDimensionsAndClampsInsideDisplayEdge()
     {
         var bounds = new RectD(0, 0, 1000, 800);
@@ -113,36 +139,138 @@ public sealed class RekordCoreTests
     }
 
     [Fact]
-    public void BuildGifArguments_Includes2PassPaletteAndTrim()
+    public void BuildGifTwoPassArguments_StreamsWithoutSplitFilterAndIncludesTrim()
     {
         var trim = new TrimRange(1.5, 4.5, 8.0);
         var options = new ExportOptions
         {
             Format = ExportFormat.Gif,
-            Fps = 20,
+            Fps = 24,
             ScaleMode = ExportScaleMode.Logical1x,
-            LogicalWidth = 641,
-            NativePixelWidth = 1282,
+            LogicalWidth = 1559,
+            NativePixelWidth = 1559,
             Quality = ExportQualityPreset.Balanced,
             LoopForever = true,
             TrimRange = trim,
             TotalDuration = 8.0
         };
 
-        var args = ExportEngine.BuildGifArguments(@"C:\tmp\in.mp4", @"C:\tmp\out.gif", options);
-        Assert.Contains("-ss", args);
-        Assert.Contains("1.500", args);
-        Assert.Contains("-t", args);
-        Assert.Contains("3.000", args);
-        Assert.Contains("-loop", args);
-        Assert.Contains("0", args);
+        var pass1 = ExportEngine.BuildGifPalettePassArguments(@"C:\tmp\in.mp4", @"C:\tmp\pal.png", options);
+        Assert.Contains("-ss", pass1);
+        Assert.Contains("1.500", pass1);
+        Assert.Contains("-t", pass1);
+        Assert.Contains("3.000", pass1);
+        Assert.Contains("-frames:v", pass1);
+        Assert.Contains("-update", pass1);
 
-        var filterIdx = args.ToList().IndexOf("-filter_complex");
-        Assert.True(filterIdx >= 0);
-        var filter = args[filterIdx + 1];
-        Assert.Contains("fps=20,scale=640:-2:flags=lanczos", filter);
-        Assert.Contains("palettegen=max_colors=256:stats_mode=diff", filter);
-        Assert.Contains("paletteuse=dither=sierra2_4a:diff_mode=rectangle", filter);
+        var vfIdx = pass1.ToList().IndexOf("-vf");
+        Assert.True(vfIdx >= 0);
+        var vf = pass1[vfIdx + 1];
+        Assert.DoesNotContain("split", vf);
+        Assert.Contains("fps=24,scale=1558:-2:flags=lanczos", vf);
+        Assert.Contains("palettegen=max_colors=256:stats_mode=diff", vf);
+
+        var pass2 = ExportEngine.BuildGifEncodePassArguments(@"C:\tmp\in.mp4", @"C:\tmp\pal.png", @"C:\tmp\out.gif", options);
+        Assert.Contains("-ss", pass2);
+        Assert.Contains("1.500", pass2);
+        Assert.Contains("-t", pass2);
+        Assert.Contains("3.000", pass2);
+        Assert.Contains(@"C:\tmp\pal.png", pass2);
+        Assert.Contains("-loop", pass2);
+        Assert.Contains("0", pass2);
+
+        var lavfiIdx = pass2.ToList().IndexOf("-lavfi");
+        Assert.True(lavfiIdx >= 0);
+        var lavfi = pass2[lavfiIdx + 1];
+        Assert.DoesNotContain("split", lavfi);
+        Assert.Contains("fps=24,scale=1558:-2:flags=lanczos[x]", lavfi);
+        Assert.Contains("[x][1:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle", lavfi);
+    }
+
+    [Fact]
+    public async Task ExportAnimationAsync_OneMinuteHighResGif_SucceedsWithoutOom()
+    {
+        var engine = new ExportEngine();
+        string ffmpegPath;
+        try
+        {
+            ffmpegPath = engine.ResolveFfmpegPath();
+        }
+        catch (ExportException)
+        {
+            // Skip E2E conversion if ffmpeg binary is not staged locally; CI always stages vendor/ffmpeg/ffmpeg.exe.
+            return;
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"RekordGifStress_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var inputMp4 = Path.Combine(tempDir, "stress_60s.mp4");
+            var outputGif = Path.Combine(tempDir, "stress_60s.gif");
+
+            // Generate 60s 1558x944 @ 24 FPS synthetic video matching exact reported OOM parameters
+            var genPsi = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardError = true
+            };
+            foreach (var a in new[]
+            {
+                "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc2=size=1558x944:rate=24:duration=60",
+                "-c:v", "mpeg4", "-q:v", "12", "-pix_fmt", "yuv420p",
+                inputMp4
+            })
+            {
+                genPsi.ArgumentList.Add(a);
+            }
+
+            using (var genProc = Process.Start(genPsi)!)
+            {
+                await genProc.WaitForExitAsync();
+                Assert.Equal(0, genProc.ExitCode);
+            }
+
+            var palettesBefore = Directory.GetFiles(Path.GetTempPath(), "Rekord_Palette_*.png").Length;
+            var maxProgress = 0.0;
+
+            var options = new ExportOptions
+            {
+                Format = ExportFormat.Gif,
+                Fps = 24,
+                ScaleMode = ExportScaleMode.Logical1x,
+                LogicalWidth = 1558,
+                NativePixelWidth = 1558,
+                Quality = ExportQualityPreset.Balanced,
+                LoopForever = true,
+                TotalDuration = 60.0
+            };
+
+            var exported = await engine.ExportAnimationAsync(inputMp4, outputGif, options, p =>
+            {
+                if (p > maxProgress) maxProgress = p;
+            });
+
+            Assert.True(File.Exists(exported));
+            var header = new byte[6];
+            using (var fs = File.OpenRead(exported))
+            {
+                var read = await fs.ReadAsync(header.AsMemory(0, 6));
+                Assert.Equal(6, read);
+            }
+            Assert.Equal("GIF89a", System.Text.Encoding.ASCII.GetString(header));
+            Assert.True(maxProgress >= 0.99, $"Expected progress >= 0.99, got {maxProgress}");
+
+            var palettesAfter = Directory.GetFiles(Path.GetTempPath(), "Rekord_Palette_*.png").Length;
+            Assert.Equal(palettesBefore, palettesAfter);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
     }
 
     [Fact]
